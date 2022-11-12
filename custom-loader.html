@@ -1,0 +1,22 @@
+<html>
+  <head>
+    <script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
+    <script src="./fLoader.js"></script>
+    
+  </head>
+<body>
+  <input id="text" type="text"></input>
+  <button id="button">Press me</button>
+  <script>
+    const button = document.getElementById("button");
+    const textInput = document.getElementById("text");
+    const gun = Gun();
+    button.addEventListener("click",()=>{
+       gun.get('muhin_video_test_1').get("video").get(textInput.value).once((value)=>{
+        console.log(value)
+       });
+    })
+    
+  </script>
+</body>
+</html>

@@ -2,13 +2,15 @@ let mediaRecorder;
 let clip = [];
 let m3u8;
 let ts;
-let mediaTimerId;
-let saveTimerId;
-let iteration = 0;
 
-const PERIOD = 3 * 1000;
+const { createFFmpeg } = FFmpeg;
+
+// create the FFmpeg instance and load it
+const ffmpeg = createFFmpeg({ log: true });
+ffmpeg.load();
 
 function start_recording() {
+  clip = [];
   var constraints = {
     audio: true,
     video: {
@@ -35,15 +37,14 @@ function start_recording() {
       //document.getElementById('button_start').disabled=false;
 
       mediaRecorder.ondataavailable = function (e) {
-        // console.log(e.data);
+        console.log(e.data);
         clip.push(e.data);
         //chunks.push(e.data);
       };
 
       mediaTimerId = setInterval(() => {
-        console.log("clip cleared by recorder");
         clip = [];
-      }, PERIOD);
+      }, 10 * 1000);
     })
     .catch(function (err) {
       console.log("The following error occured: " + err);
@@ -77,17 +78,26 @@ downloadURL = function (data, fileName) {
 
 const video_element = document.querySelectorAll("#video")[0];
 
-async function save_clip(clip_as_array_buffer) {
-  const { createFFmpeg } = FFmpeg;
-  // create the FFmpeg instance and load it
-  const ffmpeg = createFFmpeg({ log: true });
-  await ffmpeg.load();
+async function save_clip() {
+  const blob = new Blob(clip, { type: "video/webm" });
+  const url = window.URL.createObjectURL(blob);
+
+  currentSrc = video_element.currentSrc;
+  video_element.src = ""; // data url
+  URL.revokeObjectURL(currentSrc);
+
+  video_element.src = url; // data url
+  video_element.load();
+  video_element.play();
+
+  // fetch the AVI file
+  const sourceBuffer = await blob.arrayBuffer();
 
   // write the AVI to the FFmpeg file system
   ffmpeg.FS(
     "writeFile",
     "clip.webm",
-    new Uint8Array(clip_as_array_buffer, 0, clip_as_array_buffer.byteLength)
+    new Uint8Array(sourceBuffer, 0, sourceBuffer.byteLength)
   );
 
   // run the FFmpeg command-line tool, converting the AVI into an MP4
@@ -95,84 +105,84 @@ async function save_clip(clip_as_array_buffer) {
     `-i`,
     `clip.webm`,
     `-hls_time`,
-    `3`,
-    `-benchmark`,
-    `-hls_list_size`,
     `1`,
+    `-benchmark`,
     `-filter:v`,
     `fps=fps=10`,
-    `-hls_segment_filename`,
-    `video_segments_%0d.ts`,
-    `hls_master_for_test.m3u8`,
-    `-f`,
-    `hls`,
     `-hls_flags`,
     `independent_segments+append_list`,
-    `-hls_segment_type`,
-    `mpegts`
+    `-hls_list_size`,
+    `10`,
+    `-hls_segment_filename`,
+    "video_segments_%0d.ts",
+    `hls_master_for_test.m3u8`
+    // `-hls_time`,
+    // `3`,
+    // `-benchmark`,
+    // `-hls_list_size`,
+    // `1`,
+    // `-filter:v`,
+    // `fps=fps=10`,
+    // `-hls_segment_filename`,
+    // `video_segments_%0d.ts`,
+    // `hls_master_for_test.m3u8`,
+    // `-f`,
+    // `hls`,
+    // `-hls_flags`,
+    // `independent_segments+append_list`,
+    // `-hls_segment_type`,
+    // `mpegts`,
+    // `-master_pl_name`,
+    // `master.m3u8`
   );
 
   // read the MP4 file back from the FFmpeg file system
+
   const playlist = ffmpeg.FS("readFile", "hls_master_for_test.m3u8");
-  const video = ffmpeg.FS("readFile", `video_segments_${iteration}.ts`);
+  // const video = ffmpeg.FS("readFile", "video_segments_0.ts");
 
-  m3u8 = new Blob([playlist.buffer], { type: "video/mp4" });
-  ts = new Blob([video.buffer], { type: "video/mp4" });
+  m3u8 = new Blob([playlist.buffer], { type: "video/webm" });
+  // ts = new Blob([video.buffer], { type: "video/webm" });
 
-  iteration += 1;
-
-  return [m3u8, ts];
+  console.log(await m3u8.text());
+  // console.log(video);
+  // clip = [];
 }
 
 const start_button = document.querySelectorAll("#start")[0];
 const stop_button = document.querySelectorAll("#stop")[0];
 const save_button = document.querySelectorAll("#save")[0];
-const continious_save_button = document.querySelectorAll("#continious_save")[0];
 const download_button = document.querySelectorAll("#download")[0];
+const play_button = document.querySelectorAll("#play")[0];
 
-continious_save_button.addEventListener("click", () => {
-  clearInterval(mediaTimerId);
-  saveTimerId = setInterval(async () => {
-    console.log("start saving");
-    const slice = clip;
-    clip = [];
-
-    const blob = new Blob(slice, { type: "video/webm" });
-    const url = window.URL.createObjectURL(blob);
-
-    video_element.src = url; // data url
-    video_element.play();
-
-    // fetch the AVI file
-    const sourceBuffer = await blob.arrayBuffer();
-
-    const [m3u8, ts] = await save_clip(sourceBuffer);
-    downloadBlob(m3u8, "playlist.m3u8", "text/plain");
-    downloadBlob(ts, `video_segments_${iteration}.ts`, "video/webm");
-  }, PERIOD);
-});
-save_button.addEventListener("click", async () => {
-  const slice = clip;
-
-  const blob = new Blob(slice, { type: "video/webm" });
-  const url = window.URL.createObjectURL(blob);
-
-  video_element.src = url; // data url
+play_button.addEventListener("click", () => {
   video_element.play();
-
-  // fetch the AVI file
-  const sourceBuffer = await blob.arrayBuffer();
-
-  const [m3u8, ts] = await save_clip(sourceBuffer);
-  downloadBlob(m3u8, "playlist.m3u8", "text/plain");
-  downloadBlob(ts, `video_segments_${iteration}.ts`, "video/webm");
 });
+save_button.addEventListener("click", save_clip);
 start_button.addEventListener("click", start_recording);
 stop_button.addEventListener("click", () => {
-  clearInterval(saveTimerId);
   mediaRecorder.stop();
 });
 download_button.addEventListener("click", () => {
-  downloadBlob(m3u8, "playlist.m3u8", "text/plain");
-  downloadBlob(ts, "video_segments_0.ts", "video/webm");
+  const filenames = ffmpeg
+    .FS("readdir", ".")
+    .filter(item => item.includes("video_segments_"));
+
+  const playlist_buffer = ffmpeg.FS("readFile", "hls_master_for_test.m3u8");
+  const videos = [];
+
+  for (let i = 0; i < filenames.length; i++) {
+    const video_buffer = ffmpeg.FS("readFile", `video_segments_${i}.ts`);
+    const video = new Blob([video_buffer.buffer], { type: "video/webm" });
+
+    videos.push(video);
+  }
+
+  const playlist = new Blob([playlist_buffer.buffer], { type: "video/webm" });
+
+  downloadBlob(playlist, "playlist.m3u8", "text/plain");
+
+  videos.forEach((video, index) => {
+    downloadBlob(video, `video_segments_${index}.ts`, "video/webm");
+  });
 });

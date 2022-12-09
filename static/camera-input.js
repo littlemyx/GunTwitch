@@ -3,16 +3,24 @@ let clip = [];
 let m3u8;
 let ts;
 
+const PERIOD = 3 * 1000;
+
 const { createFFmpeg } = FFmpeg;
 
 // create the FFmpeg instance and load it
 const ffmpeg = createFFmpeg({ log: true });
 ffmpeg.load();
 
-function start_recording() {
-  clip = [];
+function download_playlist(index = 0) {
+  const playlist_buffer = ffmpeg.FS("readFile", "hls_master_for_test.m3u8");
+  const playlist = new Blob([playlist_buffer.buffer], { type: "video/webm" });
+  downloadBlob(playlist, `playlist_${index}.m3u8`, "text/plain");
+}
+
+function start_webcam(onDataAvailable, onPeriodTic, onStop) {
   var constraints = {
-    audio: true,
+    // audio: true,
+    audio: false,
     video: {
       width: { min: 640, ideal: 640, max: 640 },
       height: { min: 640, ideal: 640, max: 640 }
@@ -24,31 +32,57 @@ function start_recording() {
       const options = {
         // audioBitsPerSecond: 128000,
         // videoBitsPerSecond: 2500000,
-        mimeType: "video/webm;codecs=vp9"
+        // mimeType: "video/webm;codecs=vp9"
+        mimeType: "video/webm;codecs=opus,vp8"
         // mimeType: "video/x-matroska;codecs=avc1,opus"
       };
       mediaRecorder = new MediaRecorder(stream, options);
-      mediaRecorder.start(0);
+      mediaRecorder.start(PERIOD);
+
+      // const mediaTimerId = setInterval(onPeriodTic, PERIOD);
 
       mediaRecorder.onstop = function (e) {
-        // stream.stop();
-        clearInterval(mediaTimerId);
-      };
-      //document.getElementById('button_start').disabled=false;
-
-      mediaRecorder.ondataavailable = function (e) {
-        console.log(e.data);
-        clip.push(e.data);
-        //chunks.push(e.data);
+        // clearInterval(mediaTimerId);
+        onStop();
       };
 
-      mediaTimerId = setInterval(() => {
-        clip = [];
-      }, 10 * 1000);
+      mediaRecorder.ondataavailable = onDataAvailable;
     })
     .catch(function (err) {
       console.log("The following error occured: " + err);
     });
+}
+
+async function dataAvailableHandler(e) {
+  console.log(e.data);
+  clip.push(e.data);
+  mediaRecorder.stop();
+  await periodTicHandler(e.data);
+  clip = [];
+  //chunks.push(e.data);
+}
+
+let intervalNumber = 0;
+
+async function periodTicHandler(clip) {
+  const tmp_clip = clip;
+  // clip = [];
+  await save_clip(tmp_clip);
+
+  // download_playlist(intervalNumber);
+
+  intervalNumber += 1;
+}
+
+function stopHandler() {
+  intervalNumber = 0;
+}
+
+function start_recording() {
+  intervalNumber = 0;
+  clip = [];
+
+  start_webcam(dataAvailableHandler, periodTicHandler, stopHandler);
 }
 
 var downloadBlob, downloadURL;
@@ -78,20 +112,23 @@ downloadURL = function (data, fileName) {
 
 const video_element = document.querySelectorAll("#video")[0];
 
-async function save_clip() {
-  const blob = new Blob(clip, { type: "video/webm" });
+async function save_clip(raw_data) {
+  console.log(raw_data);
+  const blob = new Blob([raw_data], { type: "video/webm" });
   const url = window.URL.createObjectURL(blob);
 
   currentSrc = video_element.currentSrc;
   video_element.src = ""; // data url
-  URL.revokeObjectURL(currentSrc);
+  // URL.revokeObjectURL(currentSrc);
 
-  video_element.src = url; // data url
-  video_element.load();
-  video_element.play();
+  // video_element.src = url; // data url
+  // video_element.load();
+  // video_element.play();
 
   // fetch the AVI file
   const sourceBuffer = await blob.arrayBuffer();
+
+  console.log(sourceBuffer);
 
   // write the AVI to the FFmpeg file system
   ffmpeg.FS(
@@ -104,6 +141,8 @@ async function save_clip() {
   await ffmpeg.run(
     `-i`,
     `clip.webm`,
+    // `-f`,
+    // `webm`,
     `-hls_time`,
     `1`,
     `-benchmark`,
@@ -141,12 +180,37 @@ async function save_clip() {
   const playlist = ffmpeg.FS("readFile", "hls_master_for_test.m3u8");
   // const video = ffmpeg.FS("readFile", "video_segments_0.ts");
 
-  m3u8 = new Blob([playlist.buffer], { type: "video/webm" });
+  m3u8 = new Blob([playlist.buffer], { type: "plain/text" });
   // ts = new Blob([video.buffer], { type: "video/webm" });
 
   console.log(await m3u8.text());
   // console.log(video);
   // clip = [];
+}
+
+function download_videos(from = 0) {
+  const filenames = ffmpeg
+    .FS("readdir", ".")
+    .filter(item => item.includes("video_segments_"));
+
+  const videos = [];
+
+  for (let i = from; i < filenames.length; i++) {
+    const video_buffer = ffmpeg.FS("readFile", `video_segments_${i}.ts`);
+    const video = new Blob([video_buffer.buffer], { type: "video/webm" });
+
+    videos.push(video);
+  }
+
+  videos.forEach((video, index) => {
+    downloadBlob(video, `video_segments_${index}.ts`, "video/webm");
+  });
+}
+
+function save() {
+  download_videos();
+
+  download_playlist(intervalNumber);
 }
 
 const start_button = document.querySelectorAll("#start")[0];
@@ -162,27 +226,6 @@ save_button.addEventListener("click", save_clip);
 start_button.addEventListener("click", start_recording);
 stop_button.addEventListener("click", () => {
   mediaRecorder.stop();
+  // download_videos();
 });
-download_button.addEventListener("click", () => {
-  const filenames = ffmpeg
-    .FS("readdir", ".")
-    .filter(item => item.includes("video_segments_"));
-
-  const playlist_buffer = ffmpeg.FS("readFile", "hls_master_for_test.m3u8");
-  const videos = [];
-
-  for (let i = 0; i < filenames.length; i++) {
-    const video_buffer = ffmpeg.FS("readFile", `video_segments_${i}.ts`);
-    const video = new Blob([video_buffer.buffer], { type: "video/webm" });
-
-    videos.push(video);
-  }
-
-  const playlist = new Blob([playlist_buffer.buffer], { type: "video/webm" });
-
-  downloadBlob(playlist, "playlist.m3u8", "text/plain");
-
-  videos.forEach((video, index) => {
-    downloadBlob(video, `video_segments_${index}.ts`, "video/webm");
-  });
-});
+download_button.addEventListener("click", save);
